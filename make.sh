@@ -10,7 +10,7 @@ ENV_NAME="$(head -1 env.yml | cut -d " " -f 2)"
 ENV_NAME=$(echo ${ENV_NAME}_${ENV_MD5})
 ENV_NAME=${ENV_NAME:0:16}
 
-#conda env create -f env.yml -n $ENV_NAME --force
+conda env create -f env.yml -n $ENV_NAME --force
 echo "Created env $ENV_NAME"
 
 
