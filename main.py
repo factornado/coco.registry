@@ -1,6 +1,6 @@
 import yaml
 import os
-from tornado import ioloop, web, httpserver
+from tornado import ioloop, web, httpserver, httpclient, httputil
 import pandas as pd
 import logging
 
@@ -10,11 +10,12 @@ config = Config('config.yml')
 
 logging.basicConfig(
     level=10,
-    filename='/var/log/coco/{}.log'.format(os.environ['COCO_SERVICE']),
+    filename=config.conf['log.file'],
     format='%(asctime)s (%(filename)s:%(lineno)s)- %(levelname)s - %(message)s',
     )
 
 logging.info('='*80)
+
 
 class Info(web.RequestHandler):
     def get(self):
@@ -48,14 +49,91 @@ class GetAllHandler(web.RequestHandler):
             "You've asked for uri {}\n".format(
                 config.conf['name'], param))
 
+
+class ProxyHandler(web.RequestHandler):
+    @web.asynchronous
+    def redirection(self, method, name, version):
+        # Get the service configuration.
+        confs = list(config.mongo.host01.db01.collection01.find({'name': name, 'version': version}))
+        if len(confs) == 0:
+            raise web.HTTPError(500, reason='Service {} not known.'.format(service))
+        conf = confs[0]  # TODO: create round_robin here.
+
+        url = conf.get('_id', None)
+        if url is None:
+            raise web.HTTPError(500, reason='Service {} has no url.'.format(service))
+        user = conf.get('info', {}).get('user', None)
+        password = conf.get('info', {}).get('password', None)
+
+        # Parse the uri.
+        uri = self.request.uri[1:]
+        if not uri.startswith(name+'/'+version):
+            raise web.HTTPError(
+                500,
+                reason='Uri {} does not start with {}.'.format(uri, name+'/'+version))
+        uri = uri[len(name+'/'+version):]
+
+        # Proxy the request.
+        request = httpclient.HTTPRequest(
+            url + uri,
+            method=method,
+            headers=httputil.HTTPHeaders({
+                k: v for k, v in self.request.headers.get_all()
+                if k.lower() != 'host'
+                }),
+            body=self.request.body,
+            auth_username=user,
+            auth_password=password,
+            allow_nonstandard_methods=True,
+            request_timeout=300.,
+            validate_cert=False,
+            )
+        httpclient.AsyncHTTPClient().fetch(request, self.on_response)
+        # response = httpclient.HTTPClient().fetch(request)
+        # self.write(response.body)
+
+    @web.asynchronous
+    def get(self, name, version, uri=''):
+        self.redirection('GET', name, version)
+
+    @web.asynchronous
+    def post(self, name, version, uri=''):
+        self.redirection('POST', name, version)
+
+    @web.asynchronous
+    def put(self, name, version, uri=''):
+        self.redirection('PUT', name, version)
+
+    def on_response(self, response):
+        if response.code == 304:
+            self.set_status(304)
+            self.finish()
+            return
+
+        if response.error is not None:
+            raise web.HTTPError(response.code, reason=response.reason)
+
+        self.set_status(response.code)
+
+        for key, val in response.headers.get_all():
+            if key not in ['Transfer-Encoding', 'Content-Encoding']:
+                self.add_header(key, val)
+
+        if response.body:
+            self.write(response.body)
+        self.finish()
+
+
 app = web.Application([
     ("/info", Info),
     ("/(swagger)", web.StaticFileHandler, {'path': os.path.dirname(__file__)}),
     ("/get/([^/]*?)/([^/]*?)", GetOneHandler),
     ("/register/([^/]*?)/([^/]*?)", RegisterHandler),
+    ("/([^/]*?)/([^/]*?)/(.*)", ProxyHandler),
+    ("/([^/]*?)/([^/]*?)", ProxyHandler),
     ])
 
-if __name__=="__main__":
+if __name__ == "__main__":
     port = get_open_port()
     port = 53877
     print('Listening on port', port)

@@ -1,17 +1,17 @@
 name: registry
 version: v0
 threads_nb: 2
+log.file: /var/log/coco/registry.log
 db:
     mongo:
         host:
             host01:
-                address: 'localhost:27017'
+                address: 'some_database'
         database:
             db01:
                 host: host01
-                name: db01
+                name: test_coco
         collection:
             collection01:
                 database: db01
-                name: coll01
-                
+                name: registry
