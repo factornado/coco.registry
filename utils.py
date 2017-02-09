@@ -3,14 +3,6 @@ import yaml
 import pymongo
 
 
-def get_open_port():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 class Kwargs(object):
     def __init__(self, **kwargs):
         for key, val in kwargs.items():
@@ -35,3 +27,11 @@ class Config(object):
                 })
             for hostname, host in _mongo.get('host', {}).items()
             })
+
+    def get_port(self):
+        if 'port' not in self.conf:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind(("", 0))
+            self.conf['port'] = s.getsockname()[1]
+            s.close()
+        return self.conf['port']

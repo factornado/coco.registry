@@ -1,10 +1,11 @@
 import yaml
 import os
+import bson
 from tornado import ioloop, web, httpserver, httpclient, httputil
 import pandas as pd
 import logging
 
-from utils import get_open_port, Config
+from utils import Config
 
 config = Config('config.yml')
 
@@ -28,33 +29,38 @@ class RegisterHandler(web.RequestHandler):
         body = pd.json.loads(self.request.body)
         if 'url' not in body:
             raise web.HTTPError(500, 'body must at least contain `url`.')
-        doc = {'_id': body.pop('url'), 'name': name, 'version': version, 'info': body}
+        doc = {'id': bson.ObjectId(),
+               '_id': body.pop('url'),
+               'name': name,
+               'version': version,
+               'info': body,
+               }
         replace = config.mongo.host01.db01.collection01.replace_one(
             {'_id': doc['_id']}, doc, upsert=True)
         self.write('ok')
-
-
-class GetOneHandler(web.RequestHandler):
-    """Get the urls for one registered service."""
     def get(self, name=None, version=None):
-        self.write(
-            "Asked for {}//{}\n".format(name, version))
+        confs = list(config.mongo.host01.db01.collection01.find({'name': name, 'version': version}))
+        self.write({name: {version: confs}})
 
 
 class GetAllHandler(web.RequestHandler):
     """Get the list of all registered services."""
     def get(self, param=''):
-        self.write(
-            "Hello from service {}. "
-            "You've asked for uri {}\n".format(
-                config.conf['name'], param))
+        data = pd.DataFrame([{'name': x['name'], 'version': x['version'], 'doc': x}
+                             for x in config.mongo.host01.db01.collection01.find()])
+        self.write({name: {version: subgroup['doc'].tolist()
+                           for version, subgroup in group.groupby('version')}
+                    for name, group in data.groupby('name')}
+                   )
 
 
 class ProxyHandler(web.RequestHandler):
     @web.asynchronous
     def redirection(self, method, name, version):
         # Get the service configuration.
-        confs = list(config.mongo.host01.db01.collection01.find({'name': name, 'version': version}))
+        confs = list(config.mongo.host01.db01.collection01.find(
+                {'name': name, 'version': version},
+                sort=[('id', -1)]))  # We get the most recent heartbeat first.
         if len(confs) == 0:
             raise web.HTTPError(500, reason='Service {} not known.'.format(service))
         conf = confs[0]  # TODO: create round_robin here.
@@ -124,19 +130,45 @@ class ProxyHandler(web.RequestHandler):
         self.finish()
 
 
+class SwaggerHandler(web.RequestHandler):
+    def get(self):
+        data = pd.DataFrame([{'name': x['name'], 'version': x['version'], 'doc': x}
+                             for x in config.mongo.host01.db01.collection01.find()])
+        self.write({
+            'apiVersion': '1.0',
+            'apis': [
+                {
+                    'description': '/'.join((name,version)),
+                    'path': '/{}/{}/swagger.json'.format(name,version),
+                    'position': i,
+                    } for i, ((name, version), _) in enumerate(data.groupby(['name', 'version']))],
+            'authorizations': {},
+            'info': {
+                'contact': 'Contact Martin Journois (Michelin solutions) or Nicolas Roux (Agaetis)',  # noqa
+                'description': 'API for arabica',
+                'license': 'Property of Michelin solutions®',
+                'licenseUrl': '-',
+                'termsOfServiceUrl': 'API strictly reserved to Michelin solutions® internal applications',  # noqa
+                'title': 'Michelin solutions® FleetScience API',
+                },
+            'swaggerVersion': '1.2',
+            })
+
+
 app = web.Application([
+    ("", SwaggerHandler),
+    ("/", SwaggerHandler),
     ("/info", Info),
     ("/(swagger)", web.StaticFileHandler, {'path': os.path.dirname(__file__)}),
-    ("/get/([^/]*?)/([^/]*?)", GetOneHandler),
+    ("/register/all", GetAllHandler),
     ("/register/([^/]*?)/([^/]*?)", RegisterHandler),
     ("/([^/]*?)/([^/]*?)/(.*)", ProxyHandler),
     ("/([^/]*?)/([^/]*?)", ProxyHandler),
     ])
 
 if __name__ == "__main__":
-    port = get_open_port()
-    port = 53877
-    print('Listening on port', port)
+    port = config.get_port()
+    logging.info('Listening on port', port)
 
     server = httpserver.HTTPServer(app)
     server.bind(port, address='0.0.0.0')
