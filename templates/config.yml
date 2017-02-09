@@ -1,8 +1,8 @@
-name: registry
+name: COCO_SERVICE_NAME
 version: v0
 threads_nb: 2
 port: 8800
-log.file: /tmp/registry.log
+log.file: /tmp/COCO_SERVICE_NAME.log
 db:
     mongo:
         host:
@@ -15,4 +15,4 @@ db:
         collection:
             collection01:
                 database: db01
-                name: registry
+                name: COCO_SERVICE_NAME
