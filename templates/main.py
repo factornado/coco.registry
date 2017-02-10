@@ -39,14 +39,17 @@ class RegisterHandler(web.RequestHandler):
             {'_id': doc['_id']}, doc, upsert=True)
         self.write('ok')
     def get(self, name=None, version=None):
-        confs = list(config.mongo.host01.db01.collection01.find({'name': name, 'version': version}))
-        self.write({name: {version: confs}})
+        query = {'name': name}
+        if version is not None:
+            query['version'] = version
+        confs = list(config.mongo.host01.db01.collection01.find(query))
+        self.write({name: {str(version) : confs}})
 
 
 class GetAllHandler(web.RequestHandler):
     """Get the list of all registered services."""
     def get(self, param=''):
-        data = pd.DataFrame([{'name': x['name'], 'version': x['version'], 'doc': x}
+        data = pd.DataFrame([{'name': x['name'], 'version': str(x['version']), 'doc': x}
                              for x in config.mongo.host01.db01.collection01.find()])
         self.write({name: {version: subgroup['doc'].tolist()
                            for version, subgroup in group.groupby('version')}
@@ -56,28 +59,32 @@ class GetAllHandler(web.RequestHandler):
 
 class ProxyHandler(web.RequestHandler):
     @web.asynchronous
-    def redirection(self, method, name, version):
+    def redirection(self, method, name, version=None):
         # Get the service configuration.
+        query = {'name': name}
+        if version is not None:
+            query['version'] = version
         confs = list(config.mongo.host01.db01.collection01.find(
-                {'name': name, 'version': version},
+                query,
                 sort=[('id', -1)]))  # We get the most recent heartbeat first.
         if len(confs) == 0:
-            raise web.HTTPError(500, reason='Service {} not known.'.format(service))
+            raise web.HTTPError(500, reason='Service {}/{} not known.'.format(name, version))
         conf = confs[0]  # TODO: create round_robin here.
 
         url = conf.get('_id', None)
         if url is None:
-            raise web.HTTPError(500, reason='Service {} has no url.'.format(service))
+            raise web.HTTPError(500, reason='Service {} has no url.'.format(name, version))
         user = conf.get('info', {}).get('user', None)
         password = conf.get('info', {}).get('password', None)
 
         # Parse the uri.
         uri = self.request.uri[1:]
-        if not uri.startswith(name+'/'+version):
+        prefix = name+'/'+version if version is not None else name
+        if not uri.startswith(prefix):
             raise web.HTTPError(
                 500,
-                reason='Uri {} does not start with {}.'.format(uri, name+'/'+version))
-        uri = uri[len(name+'/'+version):]
+                reason='Uri {} does not start with {}.'.format(uri, prefix))
+        uri = uri[len(prefix):]
 
         # Proxy the request.
         request = httpclient.HTTPRequest(
@@ -99,16 +106,16 @@ class ProxyHandler(web.RequestHandler):
         # self.write(response.body)
 
     @web.asynchronous
-    def get(self, name, version, uri=''):
-        self.redirection('GET', name, version)
+    def get(self, name, version=None, uri=''):
+        self.redirection('GET', name, version=version)
 
     @web.asynchronous
-    def post(self, name, version, uri=''):
-        self.redirection('POST', name, version)
+    def post(self, name, version=None, uri=''):
+        self.redirection('POST', name, version=version)
 
     @web.asynchronous
-    def put(self, name, version, uri=''):
-        self.redirection('PUT', name, version)
+    def put(self, name, version=None, uri=''):
+        self.redirection('PUT', name, version=version)
 
     def on_response(self, response):
         if response.code == 304:
@@ -132,16 +139,20 @@ class ProxyHandler(web.RequestHandler):
 
 class SwaggerHandler(web.RequestHandler):
     def get(self):
-        data = pd.DataFrame([{'name': x['name'], 'version': x['version'], 'doc': x}
+        data = pd.DataFrame([{
+            'name': x['name'],
+            'version': x['version'],
+            'prefix': '/'.join((x['name'], x['version'])) if x['version'] is not None else x['name'],
+            'doc': x}
                              for x in config.mongo.host01.db01.collection01.find()])
         self.write({
             'apiVersion': '1.0',
             'apis': [
                 {
-                    'description': '/'.join((name,version)),
-                    'path': '/{}/{}/swagger.json'.format(name,version),
+                    'description': prefix,
+                    'path': '/{}/swagger.json'.format(prefix),
                     'position': i,
-                    } for i, ((name, version), _) in enumerate(data.groupby(['name', 'version']))],
+                    } for i, ((name, prefix), _) in enumerate(data.groupby(['name', 'prefix']))],
             'authorizations': {},
             'info': {
                 'contact': 'Contact Martin Journois (Michelin solutions) or Nicolas Roux (Agaetis)',  # noqa
