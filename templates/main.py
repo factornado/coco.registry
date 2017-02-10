@@ -106,15 +106,15 @@ class ProxyHandler(web.RequestHandler):
         # self.write(response.body)
 
     @web.asynchronous
-    def get(self, name, version=None, uri=''):
+    def get(self, name, uri='', version=None):
         self.redirection('GET', name, version=version)
 
     @web.asynchronous
-    def post(self, name, version=None, uri=''):
+    def post(self, name, uri='', version=None):
         self.redirection('POST', name, version=version)
 
     @web.asynchronous
-    def put(self, name, version=None, uri=''):
+    def put(self, name, uri='', version=None):
         self.redirection('PUT', name, version=version)
 
     def on_response(self, response):
@@ -150,7 +150,7 @@ class SwaggerHandler(web.RequestHandler):
             'apis': [
                 {
                     'description': prefix,
-                    'path': '/{}/swagger.json'.format(prefix),
+                    'path': '/{}/swagger'.format(name),
                     'position': i,
                     } for i, ((name, prefix), _) in enumerate(data.groupby(['name', 'prefix']))],
             'authorizations': {},
@@ -173,8 +173,9 @@ app = web.Application([
     ("/(swagger)", web.StaticFileHandler, {'path': os.path.dirname(__file__)}),
     ("/register/all", GetAllHandler),
     ("/register/([^/]*?)/([^/]*?)", RegisterHandler),
-    ("/([^/]*?)/([^/]*?)/(.*)", ProxyHandler),
-    ("/([^/]*?)/([^/]*?)", ProxyHandler),
+    ("/register/([^/]*?)", RegisterHandler),
+    ("/([^/]*?)/(.*)", ProxyHandler),
+    ("/([^/]*?)", ProxyHandler),
     ])
 
 if __name__ == "__main__":
